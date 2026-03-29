@@ -1,79 +1,81 @@
 import numpy as np
 import pandas as pd
+from sklearn.linear_model import LogisticRegression
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import StandardScaler
+from sklearn.metrics import (accuracy_score, classification_report,
+                             confusion_matrix, roc_auc_score, roc_curve)
 import matplotlib.pyplot as plt
+import seaborn as sns
+from ucimlrepo import fetch_ucirepo
 
-cols = ["fLength","fWidth","fSize","fConc","fConc1","fAsym","fM3Long","fM3Trans","fAlpha","fDist","class"]
+magic_gamma_telescope = fetch_ucirepo(id=159)
+X = magic_gamma_telescope.data.features
+y = magic_gamma_telescope.data.targets
 
-df = pd.read_csv("magic04.data", names=cols)
-df["class"] = (df["class"] == "g").astype(int)
+print("Dataset Shape:", X.shape)
+print("\nFeature Names:\n", X.columns.tolist())
+print("\nClass Distribution:\n", y.value_counts())
 
-train, val, split = np.split(df, [int(0.6*len(df)), int(0.8*len(df))])
+y = y.squeeze()
+y = (y == 'g').astype(int)
 
-train = pd.DataFrame(train, columns = cols)
+X_train, X_test, y_train, y_test = train_test_split(
+    X, y, test_size=0.2, random_state=42, stratify=y
+)
 
-train_X = train[["fLength","fWidth","fSize","fConc","fConc1","fAsym","fM3Long","fM3Trans","fAlpha","fDist"]].values
-train_Y = train["class"].values
+scaler = StandardScaler()
+X_train_scaled = scaler.fit_transform(X_train)
+X_test_scaled  = scaler.transform(X_test)
 
-m,n = train_X.shape
-epsilon = 1e-15
+model = LogisticRegression(max_iter=1000, random_state=42)
+model.fit(X_train_scaled, y_train)
 
-def sigmoid(z):
-    return 1.0 / (1.0 + np.exp(-z))
+y_pred      = model.predict(X_test_scaled)
+y_pred_prob = model.predict_proba(X_test_scaled)[:, 1]
 
-def cost_func(X, Y, w, b):
-    cost_sum = 0
-    for i in range(m):
-        z = np.dot(w, X[i]) + b
-        g = sigmoid(z)
-        cost_sum += -Y[i]*np.log(g+epsilon) - (1-Y[i])*np.log(1-g+epsilon)
+print("\n── Model Evaluation ──")
+print(f"Accuracy  : {accuracy_score(y_test, y_pred):.4f}")
+print(f"ROC-AUC   : {roc_auc_score(y_test, y_pred_prob):.4f}")
+print("\nClassification Report:")
+print(classification_report(y_test, y_pred, target_names=['Hadron (0)', 'Gamma (1)']))
 
-    return (1/m)*cost_sum
+cm = confusion_matrix(y_test, y_pred)
+plt.figure(figsize=(6, 5))
+sns.heatmap(cm, annot=True, fmt='d', cmap='Blues',
+            xticklabels=['Hadron', 'Gamma'],
+            yticklabels=['Hadron', 'Gamma'])
+plt.title('Confusion Matrix')
+plt.ylabel('Actual')
+plt.xlabel('Predicted')
+plt.tight_layout()
+plt.show()
 
-def gradient(X, Y, w, b):
-    grad_w = np.zeros(n)
-    grad_b = 0
-    for i in range(m):
-        z = np.dot(w, X[i]) + b
-        g = sigmoid(z)
-        grad_b += (g - Y[i])
-        for j in range(n):
-            grad_w[j] += (g - Y[i])*X[i,j]
+fpr, tpr, _ = roc_curve(y_test, y_pred_prob)
+auc_score   = roc_auc_score(y_test, y_pred_prob)
 
-    grad_w = (1/m)*grad_w
-    grad_b = (1/m)*grad_b
-    return grad_w, grad_b
+plt.figure(figsize=(7, 5))
+plt.plot(fpr, tpr, color='darkorange', lw=2,
+         label=f'ROC Curve (AUC = {auc_score:.4f})')
+plt.plot([0, 1], [0, 1], color='navy', lw=1, linestyle='--', label='Random')
+plt.xlabel('False Positive Rate')
+plt.ylabel('True Positive Rate')
+plt.title('ROC Curve – MAGIC Gamma Telescope')
+plt.legend(loc='lower right')
+plt.tight_layout()
+plt.show()
 
-def gradient_descent(X, Y, alpha, epochs):
-    w = np.zeros(n)
-    b = 0
-    for i in range(epochs):
-        grad_w, grad_b = gradient(X, Y, w, b)
-        w = w - alpha*grad_w
-        b = b - alpha*grad_b
-        if (i % 1000 == 0):
-            print(f"Epoch: {i}")
-            print(f"Cost: {cost_func(X, Y, w, b)}")
-    return w,b
+coeff_df = pd.DataFrame({
+    'Feature'    : X.columns,
+    'Coefficient': model.coef_[0]
+}).sort_values('Coefficient', ascending=False)
 
-def predict(X, w, b):
-    preds = np.zeros(m)
-    for i in range(m):
-        z = np.dot(w, X[i]) + b
-        g = sigmoid(z)
-        if  (g >= 0.5):
-            preds[i] = 1
-        else:
-            preds[i] = 0
-
-    return preds
-
-learning_rate = 0.01
-epochs = 10000
-
-final_w, final_b = gradient_descent(train_X, train_Y, learning_rate, epochs)
-
-predictions = predict(train_X, final_w, final_b)
-accuracy = np.mean(predictions == train_Y)*100
-print(f"training accuracy: {accuracy:.2f}%")
-
-
+print("\nFeature Coefficients:\n", coeff_df.to_string(index=False))
+    
+plt.figure(figsize=(8, 5))
+sns.barplot(data=coeff_df, x='Coefficient', y='Feature',
+            palette='coolwarm', hue='Feature', legend=False)
+plt.title('Logistic Regression – Feature Coefficients')
+plt.axvline(0, color='black', linewidth=0.8)
+plt.tight_layout()
+plt.show()
